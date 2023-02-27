@@ -1,0 +1,174 @@
+import ccxtpro
+import pandas as pd
+import math
+import numpy as np
+
+#///Define exchange and enter API credentials///
+
+exchange = ccxtpro.mexc({
+    'apiKey': '',
+    'secret': '',
+})
+
+#///Load Exchange Markets///
+
+exchange.load_markets()
+
+#///Define trading pair(s)///
+
+symbol = 'MX/USDT' 
+
+#///Calculate Market Depth///
+
+def is_market_liquid(market, min_orderbook_depth):
+    orderbook = exchange.fetch_order_book(market)
+    bid_depth = sum([bid[0] * bid[1] for bid in orderbook['bids']])
+    ask_depth = sum([ask[0] * ask[1] for ask in orderbook['asks']])
+    return bid_depth >= min_orderbook_depth and ask_depth >= min_orderbook_depth
+
+    print (is_market_liquid(symbol, 1000))
+
+#///Calculate KRI using VWAP and VWMA///
+
+# Set the time period for the VWMA
+vwap_period = 20
+
+# Retrieve the OHLCV data for the trading pair
+ohlcv = await exchange.fetch_ohlcv(symbol, timeframe='1h')
+
+print (ohlcv)
+
+# Convert the OHLCV data to a pandas DataFrame
+df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+df = df.set_index('timestamp')
+
+# Calculate the VWAP for each candle
+vwap = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
+
+# Calculate the VWMA over the specified time period
+vwma = vwap.rolling(vwap_period).mean()
+
+print(vwma)
+
+# Calculate the KRI for the current candle
+current_close = df['close'][-1]
+current_kri = (current_close - vwma[-1]) / vwma[-1]
+
+print(f"Current KRI: {current_kri:.4f}")
+
+#///Calculate order book imbalance///
+
+# Set the price level to calculate the order book imbalance
+price_level = 1000
+
+# Retrieve the order book for the trading pair
+order_book = await exchange.fetch_order_book(symbol)
+
+# Calculate the bid and ask volumes at the specified price level
+bid_volume = sum(bid[1] for bid in order_book['bids'] if bid[0] >= price_level)
+ask_volume = sum(ask[1] for ask in order_book['asks'] if ask[0] <= price_level)
+
+# Calculate the total volume at the specified price level
+total_volume = bid_volume + ask_volume
+
+# Calculate the order book imbalance at the specified price level
+imbalance = (bid_volume - ask_volume) / total_volume
+
+print(f"Order book imbalance at price level {price_level}: {imbalance:.4f}")
+
+#///Calculate order size///
+
+# Set the price level to use for order sizing
+price_level = 0.0 # adjust this value as needed
+
+# Set the order size as a percentage of the total volume at the specified price level
+order_size_percent = 0.5 # adjust this value to control the order size as a percentage of the total volume
+order_size = order_size_percent * total_volume
+
+#///Caclulate and adjust bid and ask spreads using KRI///
+
+# Define initial bid and ask spreads (in percentage points)
+initial_bid_spread = 10
+initial_ask_spread = 10
+
+# Adjust the bid and ask spreads based on the KRI
+if current_kri <= 0:
+    bid_spread = 10  # prevents fills in the event of volatility
+    ask_spread = 10  # prevents fills in the event of volatility
+elif current_kri >= 2.5:
+    bid_spread = 0.35
+    ask_spread = 0.35
+elif current_kri >= 3.5:
+    bid_spread = 0.25
+    ask_spread = 0.25
+elif current_kri >= 4.5:
+    bid_spread = 0.15
+    ask_spread = 0.15
+elif current_kri >= 5.5:
+    bid_spread = 0.05
+    ask_spread = 0.05
+else:
+    bid_spread = initial_bid_spread
+    ask_spread = initial_ask_spread
+
+# Calculate the bid and ask prices based on the adjusted bid and ask spreads
+bid_price = ticker['bid'] * (1 - bid_spread / 100)
+ask_price = ticker['ask'] * (1 + ask_spread / 100)
+
+#///Retain Trade Entry Price///
+
+# Define an empty DataFrame to store trade information
+trades = pd.DataFrame(columns=['timestamp', 'type', 'size', 'price'])
+
+# When you enter a trade, add a new row to the DataFrame
+timestamp = exchange.milliseconds() # current timestamp, using the exchange API
+type = 'buy' # trade type (buy or sell)
+size = 1.0 # trade size, in the base currency (e.g. BTC for a BTC/USDT market)
+price = 50000.0 # trade price, in the quote currency (e.g. USDT for a BTC/USDT market)
+trades = trades.append({'timestamp': timestamp, 'type': type, 'size': size, 'price': price}, ignore_index=True)
+
+# When you exit a trade, update the corresponding row in the DataFrame
+trade_id = 0 # the ID of the trade you want to update (this could be stored elsewhere, like in a database)
+exit_price = 55000.0 # the price at which you exited the trade
+trades.loc[trade_id, 'exit_price'] = exit_price
+
+# Calculate profit or loss
+trades['profit_loss'] = (trades['exit_price'] - trades['price']) * trades['size']
+
+#///Define exit strategy based upon KRI and OBI values///
+
+# Set exit criteria
+exit_kri = 5.0
+exit_obi = -0.1
+
+# Monitor KRI and OBI
+while True:
+    # Calculate KRI and OBI
+    kri = ...
+    obi = ...
+    
+    # Check exit criteria
+    if kri >= exit_kri and obi <= exit_obi:
+        # Execute exit trade
+        order_book = await exchange.fetch_order_book(symbol)
+        ask_price = order_book['asks'][0][0]
+        bid_price = order_book['bids'][0][0]
+        spread = (ask_price - bid_price) / ask_price
+        ask_percent = spread + 0.001  # adjust ask spread to ensure orders fill
+        amount = ...  # determine order size based on orderbook depth
+        await exchange.create_limit_sell_order(symbol, amount, ask_price, {'post_only': True, 'timeInForce': 'GTC'})
+        
+        # Log exit trade information
+        timestamp = ...  # current timestamp
+        trade_type = 'sell'  # trade type (sell for a long position)
+        trade_size = amount
+        trade_price = ask_price
+        trades = trades.append({'timestamp': timestamp, 'type': trade_type, 'size': trade_size, 'price': trade_price}, ignore_index=True)
+        
+        # Reset exit criteria
+        exit_kri = 0.0
+        exit_obi = 0.0
+        
+    # Wait for next iteration
+    await asyncio.sleep(1)
